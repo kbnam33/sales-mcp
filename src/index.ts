@@ -1,63 +1,103 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { GoogleHandler } from "./auth/google-handler";
 import { Props } from "./auth/oauth";
-import {
-	PaymentState,
-	experimental_PaidMcpAgent as PaidMcpAgent,
-  } from '@stripe/agent-toolkit/cloudflare';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import stripeWebhookHandler from "./webhooks/stripe";
 import * as tools from './tools';
+import { ICPRecord } from "./helpers/schemas";
 
-type State = PaymentState & {};
-
-type AgentProps = Props & {
-	STRIPE_SUBSCRIPTION_PRICE_ID: string;
-	BASE_URL: string;
+// The state of our Durable Object.
+type State = {
+	icpRecord?: ICPRecord;
 };
 
-// Define our MCP agent with tools
-export class BoilerplateMCP extends PaidMcpAgent<Env, State, AgentProps> {
+// Define our MCP agent as a Durable Object class.
+export class BoilerplateMCP {
+    state: DurableObjectState;
+    env: Env;
+	props: Props | null = null;
+	initialized: boolean = false;
+
 	server = new McpServer({
-		name: "Boilerplate MCP",
+		name: "Sales Engagement MCP",
 		version: "1.0.0",
 	});
 
-	async init() {
-		// Example free tools (that don't require payment but do require a logged in user)
+    constructor(state: DurableObjectState, env: Env) {
+        this.state = state;
+        this.env = env;
+    }
+
+	// Method to retrieve the ICP Record from Durable Object storage
+	async getIcpRecord(): Promise<ICPRecord | undefined> {
+		return this.state.storage.get("icpRecord");
+	}
+
+	// Method to save the ICP Record to Durable Object storage
+	async setIcpRecord(icpRecord: ICPRecord) {
+		const currentIcp = await this.getIcpRecord() ?? {};
+		const updatedIcp = { ...currentIcp, ...icpRecord };
+		await this.state.storage.put("icpRecord", updatedIcp);
+	}
+
+	// Initialize tools once per instance
+	init() {
+		if (this.initialized) return;
+
+		tools.configureIcpTool(this);
 		tools.addTool(this);
 		tools.calculateTool(this);
+		
+		this.initialized = true;
+	}
 
-		// Example of a free tool that checks for active subscriptions and the status of the logged in user's Stripe customer ID
-		tools.checkPaymentHistoryTool(this, {
-			BASE_URL: this.env.BASE_URL,
-			STRIPE_SECRET_KEY: this.env.STRIPE_SECRET_KEY
-		});
+	async fetch(request: Request) {
+		// The OAuth provider passes user properties in a header.
+		// We parse this to make it available to our tools.
+		const propsHeader = request.headers.get('X-MCP-Auth-Props');
+		if (propsHeader) {
+			try {
+				this.props = JSON.parse(atob(propsHeader));
+			} catch (e) {
+				console.error("Failed to parse auth props", e);
+				return new Response("Invalid auth properties", { status: 400 });
+			}
+		}
+		
+		this.init();
 
-		// Example of a paid tool that requires a logged in user and a one-time payment
-		tools.onetimeAddTool(this, {
-			STRIPE_ONE_TIME_PRICE_ID: this.env.STRIPE_ONE_TIME_PRICE_ID,
-			BASE_URL: this.env.BASE_URL
-		});
-
-		// Example of a paid tool that requires a logged in user and a subscription
-		tools.subscriptionTool(this, {
-			STRIPE_SUBSCRIPTION_PRICE_ID: this.env.STRIPE_SUBSCRIPTION_PRICE_ID,
-			BASE_URL: this.env.BASE_URL
-		});
-
-		// Example of a paid tool that requires a logged in user and a subscription with metered usage
-		tools.meteredAddTool(this, {
-			STRIPE_METERED_PRICE_ID: this.env.STRIPE_METERED_PRICE_ID,
-			BASE_URL: this.env.BASE_URL
+		return this.server.fetch(request, {
+			// You can pass any context you want to be available in your tools here
+			env: this.env,
+			ctx: this.state,
+			props: this.props,
 		});
 	}
 }
 
+// Helper function to forward a request to our Durable Object
+const forwardToMcpObject = (request: Request, env: Env, ctx: ExecutionContext, props?: Props) => {
+	// We use a singleton DO instance for this user/session.
+	// For a multi-tenant app, you might derive the name from the user's ID or organization.
+	const doId = env.MCP_OBJECT.idFromName("sales-mcp-instance");
+	const stub = env.MCP_OBJECT.get(doId);
+
+	// We need to clone the request to make it mutable.
+	const newRequest = new Request(request.url, request);
+
+	// Pass the authenticated user's properties to the DO via a header.
+	if (props) {
+		newRequest.headers.set('X-MCP-Auth-Props', btoa(JSON.stringify(props)));
+	}
+	
+	return stub.fetch(newRequest);
+};
+
+
 // Create an OAuth provider instance for auth routes
 const oauthProvider = new OAuthProvider({
 	apiRoute: "/sse",
-	apiHandler: BoilerplateMCP.mount("/sse") as any,
+	// FIX: The handler must be an object with a `fetch` method.
+	apiHandler: { fetch: forwardToMcpObject } as any,
 	defaultHandler: GoogleHandler as any,
 	authorizeEndpoint: "/authorize",
 	tokenEndpoint: "/token",
@@ -77,22 +117,15 @@ export default {
 				headers: { "Content-Type": "text/html" },
 			});
 		}
+		
+		// For SSE requests that are not part of the initial auth flow,
+		// we need to manually invoke the DO. In a real app, you would
+		// add your own token validation here before forwarding.
+		if (path === "/sse") {
+			return forwardToMcpObject(request, env, ctx);
+		}
 
-		// Handle payment success page
-		if (path === "/payment/success") {
-			// @ts-ignore
-			const successPage = await import('./pages/payment-success.html');
-			return new Response(successPage.default, {
-				headers: { "Content-Type": "text/html" },
-			});
-		}
-		
-		// Handle webhook
-		if (path === "/webhooks/stripe") {
-			return stripeWebhookHandler.fetch(request, env);
-		}
-		
-		// All other routes go to OAuth provider
+		// All other routes go to OAuth provider to handle auth flow
 		return oauthProvider.fetch(request, env, ctx);
 	},
 };

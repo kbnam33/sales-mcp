@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { experimental_PaidMcpAgent as PaidMcpAgent } from "@stripe/agent-toolkit/cloudflare";
+import type { BoilerplateMCP } from "..";
 
-export function addTool(agent: PaidMcpAgent<Env, any, any>) {
+export function addTool(agent: BoilerplateMCP) {
 	const server = agent.server;
 	// @ts-ignore
 	server.tool(
@@ -12,4 +12,4 @@ export function addTool(agent: PaidMcpAgent<Env, any, any>) {
 			content: [{ type: "text", text: String(a + b) }],
 		})
 	);
-} 
+}
