@@ -9,6 +9,7 @@ declare namespace Cloudflare {
 		COOKIE_ENCRYPTION_KEY: string;
 		BASE_URL: string;
 		MCP_OBJECT: DurableObjectNamespace<import("./src/index").BoilerplateMCP>;
+		APOLLO_API_KEY: string; // Add this line
 	}
 }
 interface Env extends Cloudflare.Env {}

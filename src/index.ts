@@ -1,9 +1,15 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { GoogleHandler } from "./auth/google-handler";
 import { Props } from "./auth/oauth";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import * as tools from './tools';
-import { ICPRecord } from "./helpers/schemas";
+// Correct the import path as suggested by the build error
+import { McpServer, createMcpHandler } from "@modelcontextprotocol/sdk/server/index.js";
+import { ICPRecord, UnifiedLeadRecord } from "./helpers/schemas";
+
+// --- Import Tool Functions Directly ---
+import { addTool } from "./tools/add";
+import { calculateTool } from "./tools/calculate";
+import { configureIcpTool } from "./tools/configureIcp";
+import { apolloEnrichLeadTool } from "./tools/apolloEnrichLead";
 
 // The state of our Durable Object.
 type State = {
@@ -17,42 +23,59 @@ export class BoilerplateMCP {
 	props: Props | null = null;
 	initialized: boolean = false;
 
+	// This object holds the definitions of our server and tools
 	server = new McpServer({
 		name: "Sales Engagement MCP",
 		version: "1.0.0",
 	});
 
+	// This private property will hold the actual request handler function
+	#handler: ReturnType<typeof createMcpHandler>;
+
     constructor(state: DurableObjectState, env: Env) {
         this.state = state;
         this.env = env;
+		// Create the handler once when the Durable Object is instantiated
+		this.#handler = createMcpHandler(this.server);
     }
 
-	// Method to retrieve the ICP Record from Durable Object storage
+	// --- ICP Methods ---
 	async getIcpRecord(): Promise<ICPRecord | undefined> {
 		return this.state.storage.get("icpRecord");
 	}
 
-	// Method to save the ICP Record to Durable Object storage
 	async setIcpRecord(icpRecord: ICPRecord) {
 		const currentIcp = await this.getIcpRecord() ?? {};
 		const updatedIcp = { ...currentIcp, ...icpRecord };
 		await this.state.storage.put("icpRecord", updatedIcp);
 	}
 
+	// --- Lead Record Methods ---
+	async getLeadRecord(email: string): Promise<UnifiedLeadRecord | undefined> {
+		return this.state.storage.get(`lead_${email.toLowerCase()}`);
+	}
+
+	async updateLeadRecord(email: string, data: Partial<UnifiedLeadRecord>) {
+		const key = `lead_${email.toLowerCase()}`;
+		const existingRecord = await this.getLeadRecord(email) ?? { email };
+		const updatedRecord = { ...existingRecord, ...data };
+		await this.state.storage.put(key, updatedRecord);
+	}
+
 	// Initialize tools once per instance
 	init() {
 		if (this.initialized) return;
 
-		tools.configureIcpTool(this);
-		tools.addTool(this);
-		tools.calculateTool(this);
+		// --- Register Tools Directly on the server definition object ---
+		configureIcpTool(this);
+		addTool(this);
+		calculateTool(this);
+		apolloEnrichLeadTool(this);
 		
 		this.initialized = true;
 	}
 
 	async fetch(request: Request) {
-		// The OAuth provider passes user properties in a header.
-		// We parse this to make it available to our tools.
 		const propsHeader = request.headers.get('X-MCP-Auth-Props');
 		if (propsHeader) {
 			try {
@@ -65,8 +88,8 @@ export class BoilerplateMCP {
 		
 		this.init();
 
-		return this.server.fetch(request, {
-			// You can pass any context you want to be available in your tools here
+		// Use the created handler to process the request
+		return this.#handler(request, {
 			env: this.env,
 			ctx: this.state,
 			props: this.props,
@@ -76,15 +99,10 @@ export class BoilerplateMCP {
 
 // Helper function to forward a request to our Durable Object
 const forwardToMcpObject = (request: Request, env: Env, ctx: ExecutionContext, props?: Props) => {
-	// We use a singleton DO instance for this user/session.
-	// For a multi-tenant app, you might derive the name from the user's ID or organization.
 	const doId = env.MCP_OBJECT.idFromName("sales-mcp-instance");
 	const stub = env.MCP_OBJECT.get(doId);
-
-	// We need to clone the request to make it mutable.
 	const newRequest = new Request(request.url, request);
 
-	// Pass the authenticated user's properties to the DO via a header.
 	if (props) {
 		newRequest.headers.set('X-MCP-Auth-Props', btoa(JSON.stringify(props)));
 	}
@@ -92,11 +110,8 @@ const forwardToMcpObject = (request: Request, env: Env, ctx: ExecutionContext, p
 	return stub.fetch(newRequest);
 };
 
-
-// Create an OAuth provider instance for auth routes
 const oauthProvider = new OAuthProvider({
 	apiRoute: "/sse",
-	// FIX: The handler must be an object with a `fetch` method.
 	apiHandler: { fetch: forwardToMcpObject } as any,
 	defaultHandler: GoogleHandler as any,
 	authorizeEndpoint: "/authorize",
@@ -109,7 +124,6 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 		
-		// Handle homepage
 		if (path === "/" || path === "") {
 			// @ts-ignore
 			const homePage = await import('./pages/index.html');
@@ -118,14 +132,10 @@ export default {
 			});
 		}
 		
-		// For SSE requests that are not part of the initial auth flow,
-		// we need to manually invoke the DO. In a real app, you would
-		// add your own token validation here before forwarding.
 		if (path === "/sse") {
 			return forwardToMcpObject(request, env, ctx);
 		}
 
-		// All other routes go to OAuth provider to handle auth flow
 		return oauthProvider.fetch(request, env, ctx);
 	},
 };
