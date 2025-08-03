@@ -4,13 +4,15 @@ import type { BoilerplateMCP } from "..";
 export function calculateTool(agent: BoilerplateMCP) {
 	const server = agent.server;
 	// @ts-ignore
-	server.tool(
+	server.registerTool(
 		"calculate",
-		"This tool performs a calculation on two numbers.",
 		{
-			operation: z.enum(["add", "subtract", "multiply", "divide"]),
-			a: z.number(),
-			b: z.number(),
+			description: "This tool performs a calculation on two numbers.",
+			inputSchema: {
+				operation: z.enum(["add", "subtract", "multiply", "divide"]),
+				a: z.number(),
+				b: z.number(),
+			},
 		},
 		async ({ operation, a, b }: { operation: string; a: number; b: number }) => {
 			let result: number;

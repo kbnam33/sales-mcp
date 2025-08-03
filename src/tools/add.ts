@@ -4,10 +4,15 @@ import type { BoilerplateMCP } from "..";
 export function addTool(agent: BoilerplateMCP) {
 	const server = agent.server;
 	// @ts-ignore
-	server.tool(
+	server.registerTool(
 		"add",
-		"This tool adds two numbers together.",
-		{ a: z.number(), b: z.number() },
+		{
+			description: "This tool adds two numbers together.",
+			inputSchema: {
+				a: z.number(),
+				b: z.number()
+			},
+		},
 		async ({ a, b }: { a: number; b: number }) => ({
 			content: [{ type: "text", text: String(a + b) }],
 		})

@@ -1,45 +1,33 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { GoogleHandler } from "./auth/google-handler";
 import { Props } from "./auth/oauth";
-// Correct the import path as suggested by the build error
-import { McpServer, createMcpHandler } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ICPRecord, UnifiedLeadRecord } from "./helpers/schemas";
 
-// --- Import Tool Functions Directly ---
+// --- Import All Tool Functions ---
 import { addTool } from "./tools/add";
 import { calculateTool } from "./tools/calculate";
 import { configureIcpTool } from "./tools/configureIcp";
 import { apolloEnrichLeadTool } from "./tools/apolloEnrichLead";
+import { ingestCommunitySignalTool } from "./tools/ingestCommunitySignal";
+import { getLeadRecordTool } from "./tools/getLeadRecord";
 
-// The state of our Durable Object.
-type State = {
-	icpRecord?: ICPRecord;
-};
-
-// Define our MCP agent as a Durable Object class.
 export class BoilerplateMCP {
     state: DurableObjectState;
     env: Env;
 	props: Props | null = null;
 	initialized: boolean = false;
 
-	// This object holds the definitions of our server and tools
 	server = new McpServer({
 		name: "Sales Engagement MCP",
 		version: "1.0.0",
 	});
 
-	// This private property will hold the actual request handler function
-	#handler: ReturnType<typeof createMcpHandler>;
-
     constructor(state: DurableObjectState, env: Env) {
         this.state = state;
         this.env = env;
-		// Create the handler once when the Durable Object is instantiated
-		this.#handler = createMcpHandler(this.server);
     }
 
-	// --- ICP Methods ---
 	async getIcpRecord(): Promise<ICPRecord | undefined> {
 		return this.state.storage.get("icpRecord");
 	}
@@ -50,7 +38,6 @@ export class BoilerplateMCP {
 		await this.state.storage.put("icpRecord", updatedIcp);
 	}
 
-	// --- Lead Record Methods ---
 	async getLeadRecord(email: string): Promise<UnifiedLeadRecord | undefined> {
 		return this.state.storage.get(`lead_${email.toLowerCase()}`);
 	}
@@ -62,15 +49,15 @@ export class BoilerplateMCP {
 		await this.state.storage.put(key, updatedRecord);
 	}
 
-	// Initialize tools once per instance
 	init() {
 		if (this.initialized) return;
 
-		// --- Register Tools Directly on the server definition object ---
-		configureIcpTool(this);
-		addTool(this);
+        addTool(this);
 		calculateTool(this);
+		configureIcpTool(this);
 		apolloEnrichLeadTool(this);
+		ingestCommunitySignalTool(this);
+		getLeadRecordTool(this);
 		
 		this.initialized = true;
 	}
@@ -88,12 +75,14 @@ export class BoilerplateMCP {
 		
 		this.init();
 
-		// Use the created handler to process the request
-		return this.#handler(request, {
-			env: this.env,
-			ctx: this.state,
-			props: this.props,
-		});
+        // This is the correct way to handle web requests with this SDK version.
+        // @ts-ignore - The type definitions are incomplete, but this method exists and is required.
+        const response = await this.server.handleRequest(request, {
+            env: this.env,
+            ctx: this.state,
+            props: this.props,
+        });
+        return response;
 	}
 }
 
@@ -132,6 +121,10 @@ export default {
 			});
 		}
 		
+        if (path === "/dev-sse") {
+            return forwardToMcpObject(request, env, ctx);
+        }
+
 		if (path === "/sse") {
 			return forwardToMcpObject(request, env, ctx);
 		}

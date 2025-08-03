@@ -4,13 +4,14 @@ import { ICPRecordSchema, ICPRecord } from "../helpers/schemas";
 export function configureIcpTool(agent: BoilerplateMCP) {
 	const server = agent.server;
 	// @ts-ignore
-	server.tool(
+	server.registerTool(
 		"configure_icp",
-		"Defines or updates the Ideal Customer Profile (ICP) and lead scoring rules. All parameters are optional, and providing a parameter will overwrite its existing value.",
-		ICPRecordSchema,
+		{
+            description: "Defines or updates the Ideal Customer Profile (ICP) and lead scoring rules.",
+            inputSchema: ICPRecordSchema.shape,
+        },
 		async (params: ICPRecord) => {
 			try {
-                // The agent is our Durable Object instance, so we can call the method directly.
 				await agent.setIcpRecord(params);
 				return {
 					content: [{ type: "text", text: "ICP and scoring rules have been configured successfully." }],

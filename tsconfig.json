@@ -1,7 +1,7 @@
 {
 	"compilerOptions": {
-		"target": "es2021",
-		"lib": ["es2021"],
+		"target": "es2022", // Updated for modern syntax
+		"lib": ["es2022"],
 		"jsx": "react-jsx",
 		"module": "es2022",
 		"moduleResolution": "Bundler",
@@ -15,7 +15,8 @@
 		"strict": true,
 		"skipLibCheck": true,
 		"types": [
+			"@cloudflare/workers-types" // This is the critical line that was missing
 		]
 	},
-	"include": ["worker-configuration.d.ts", "src/**/*.ts"]
+	"include": ["src/**/*.ts", "worker-configuration.d.ts"] // Ensure this includes the types file
 }
